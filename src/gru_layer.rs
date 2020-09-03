@@ -1,10 +1,12 @@
+extern crate libc;
+use libc::c_void;
+
 use ndarray::{stack, Array, Axis, Ix1, Ix2};
 use std::error::Error;
 use std::io::BufRead;
 use ndarray::linalg::general_mat_mul;
 use crate::matrix_load::*;
 use crate::approx::*;
-use libc::c_void;
 use std::marker::PhantomData;
 
 pub type SgemmJitKernelT =
@@ -27,43 +29,59 @@ pub struct GRULayer<GS: GRUSizer> {
     state: Array<f32, Ix1>,
     pub output: Array<f32, Ix2>,
     state_proc: Array<f32, Ix1>,
-    phantom: PhantomData<GS>
+    phantom: PhantomData<GS>,
 }
 
 impl<GS: GRUSizer> GRULayer<GS> {
     pub fn new<R: BufRead>(f: &mut R) -> Result<GRULayer<GS>, Box<dyn Error>> {
-        let wio = load2dmatrix(f)?;
-        let woo = load2dmatrix(f)?;
-        let bio = load1dmatrix(f)?;
-        let boo = load1dmatrix(f)?;
-        let wir = load2dmatrix(f)?;
-        let wiu = load2dmatrix(f)?;
-        let wor = load2dmatrix(f)?;
-        let wou = load2dmatrix(f)?;
-        let bir = load1dmatrix(f)?;
-        let bor = load1dmatrix(f)?;
-        let biu = load1dmatrix(f)?;
-        let bou = load1dmatrix(f)?;
-        let wourn = align2d(stack!(Axis(1), -wou, -wor, woo)); //.t().to_owned();
-        let wiurn = align2d(stack!(Axis(1), -wiu, -wir, wio));
-        let biur = align1d(stack!(Axis(0), -biu - bou, -bir - bor));
+        let wio = load2dmatrix_without_align(f)?;
+        let woo = load2dmatrix_without_align(f)?;
+        let bio = load1dmatrix_without_align(f)?;
+        let boo = load1dmatrix_without_align(f)?;
+        let wir = load2dmatrix_without_align(f)?;
+        let wiu = load2dmatrix_without_align(f)?;
+        let wor = load2dmatrix_without_align(f)?;
+        let wou = load2dmatrix_without_align(f)?;
+        let bir = load1dmatrix_without_align(f)?;
+        let bor = load1dmatrix_without_align(f)?;
+        let biu = load1dmatrix_without_align(f)?;
+        let bou = load1dmatrix_without_align(f)?;
+
+        let negwou = -wou;
+        let negwor = -wor;
+        let negwiu = -wiu;
+        let negwir = -wir;
+        let negbiu = -biu;
+        let negbir = -bir;
+        
+        let st = stack!(Axis(1), negwou, negwor, woo);
+        let wourn = st.into_dimensionality::<Ix2>()?;
+        let sta = stack!(Axis(1), negwiu, negwir, wio);
+        let wiurn = sta.into_dimensionality::<Ix2>()?;
+        let n1 = &negbiu - &bou;
+        let n2 = &negbir - &bor;
+        let stac = stack!(Axis(0), n1, n2);
+        let biur = stac.into_dimensionality::<Ix1>()?;
+
+        //wio = -wio;
         let input_proc = align2d(Array::from_elem((GS::sequence_size(), GS::output_features() * 3), 0.0));
         let state = align1d(Array::from_elem(GS::output_features(), 0.0));
         let state_proc = align1d(Array::from_elem(GS::output_features() * 4, 0.0));
         let output = align2d(Array::from_elem((GS::sequence_size(), GS::output_features()), 0.0));
-
+        
         Ok(GRULayer {
             wourn: wourn,
             wiurn: wiurn,
             biur: biur,
             bio: bio,
             boo: boo,
-            input_proc,
-            state,
-            output,
-            state_proc,
-            phantom: PhantomData
+            input_proc: input_proc,
+            state: state,
+            output: output,
+            state_proc: state_proc,
+            phantom: PhantomData,
         })
+        
 
         // TODO: assert sizes
     }

@@ -78,6 +78,9 @@ impl ConvSizer for Conv33_48 {
   fn pool_kernel() -> usize { 3 }
 }
 
+
+// for test without extern C
+
 struct GRU48 {
 }
 
@@ -559,6 +562,7 @@ impl Caller {
               }
             }
         }
+
         let net: Box<dyn Net> = if net_type == "256" {
             Box::new(NetBig::new(&path).unwrap())
         } else if net_type == "56" { 
@@ -572,10 +576,13 @@ impl Caller {
         } else {
             Box::new(NetSmall::new(&path).unwrap())
         };
-        obj.init({
-            Caller {
-                net, beam_size, beam_cut_threshold
-            }
+
+
+        let cal = Caller {
+            net, beam_size, beam_cut_threshold
+        };
+        obj.init({ cal
+            
         })
     }
     
@@ -583,11 +590,9 @@ impl Caller {
         let mut start_pos = 0;
 
         let mut to_stack = Vec::new();
-
         while start_pos + STEP * 3 + PAD * 6 < raw_data.len() {
             let chunk = &raw_data[start_pos..(start_pos + STEP * 3 + PAD * 6).min(raw_data.len())];
             let out = self.net.predict(chunk);
-
             let slice_start_pos = if start_pos == 0 {
                 0
             } else {
@@ -603,7 +608,6 @@ impl Caller {
 
             start_pos += 3 * STEP;
         }
-
         if to_stack.len() == 0 {
             return (String::new(), String::new())
         }
