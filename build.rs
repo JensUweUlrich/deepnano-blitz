@@ -2,6 +2,7 @@
 //use std::process::Command;
 extern crate os_info;
 extern crate reqwest;
+extern crate cbindgen;
 use bzip2::read::BzDecoder;
 use tar::Archive;
 use std::env;
@@ -51,4 +52,12 @@ fn main() {
     println!("cargo:rustc-link-lib=static-nobundle=mkl_sequential");
     println!("cargo:rustc-link-lib=static-nobundle=mkl_core");
     
+
+    let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    cbindgen::Builder::new()
+      .with_crate(crate_dir)
+      .generate()
+      .expect("Unable to generate bindings")
+      .write_to_file("DeepNano2.h");
 }

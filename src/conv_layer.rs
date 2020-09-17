@@ -15,10 +15,10 @@ pub trait ConvSizer {
 }
 
 pub struct ConvLayer<CS: ConvSizer> {
-    w: Array<f32, Ix2>,
-    b: Array<f32, Ix1>,
-    im2col: Array<f32, Ix2>,
-    convout: Array<f32, Ix2>,
+    pub w: Array<f32, Ix2>,
+    pub b: Array<f32, Ix1>,
+    pub im2col: Array<f32, Ix2>,
+    pub convout: Array<f32, Ix2>,
     pub pooled_out: Array<f32, Ix2>,
     phantom: PhantomData<CS>
 }

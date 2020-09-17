@@ -4,6 +4,7 @@
 extern crate ndarray;
 extern crate kth;
 extern crate libc;
+extern crate statistical;
 
 mod matrix_load;
 mod conv_layer;
@@ -16,17 +17,22 @@ use gru_layer::*;
 
 use libc::{c_float, c_int, c_longlong, c_void};
 use ndarray::{stack, Array, Axis, Ix1, Ix2, ArrayBase, Data};
+use statistical::{median};
 use std::error::Error;
+use std::ffi::CStr;
+use std::ffi::CString;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::ptr;
 
-use pyo3::prelude::*;
+/*use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use numpy::{PyArray2};
+*/
 
 extern "C" {
+    
     fn mkl_cblas_jit_create_sgemm(
         JITTER: *mut *mut c_void,
         layout: u32,
@@ -78,8 +84,6 @@ impl ConvSizer for Conv33_48 {
   fn pool_kernel() -> usize { 3 }
 }
 
-
-// for test without extern C
 
 struct GRU48 {
 }
@@ -514,17 +518,81 @@ impl Net for NetBig {
 }
 
 
-#[pyclass]
-struct Caller {
+pub struct Caller {
     net: Box<dyn Net>,
     beam_size: usize,
     beam_cut_threshold: f32
 }
 
-#[pymethods]
+
+pub struct SignalVector {
+    pub signal : Vec<f32>
+}
+
+impl SignalVector {
+    fn new() -> SignalVector {
+        SignalVector {
+            signal: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, val: f32) {
+        self.signal.push(val);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn create_signal_vector() -> *mut SignalVector {
+    Box::into_raw(Box::new(SignalVector::new()))
+}
+
+#[no_mangle]
+pub extern "C" fn signal_vector_push(ptr: *mut SignalVector, val: f32) {
+    let signVec = unsafe {
+        assert!(!ptr.is_null());
+        &mut *ptr
+    };
+    signVec.push(val); 
+}
+
+pub fn str_from_nullable<'a>(s: *const libc::c_char) -> Option<&'a str> {
+    if s.is_null() {
+        None
+    } else {
+        let s = unsafe { CStr::from_ptr(s) };
+        Some(s.to_str().unwrap())
+    }
+}
+
+
+#[no_mangle]
+pub extern "C" fn create_caller(net_type: *const libc::c_char, path: *const libc::c_char, beam_size: usize, beam_cut_threshold: f32) -> *mut Caller {
+    let net = str_from_nullable(net_type).unwrap();
+    let strpath = str_from_nullable(path).unwrap();
+    println!("{}", strpath);
+    let caller = Caller::new(net, strpath, beam_size, beam_cut_threshold);
+    Box::into_raw(Box::new(caller))
+}
+
+#[no_mangle]
+pub extern "C" fn call_raw_signal(ptr: *mut Caller, sigptr: *mut SignalVector) -> *mut libc::c_char {
+    let caller = unsafe {
+        assert!(!ptr.is_null());
+        &mut *ptr
+    };
+
+    let raw_data = unsafe {
+        assert!(!sigptr.is_null());
+        &mut *sigptr
+    };
+
+    let (seq, qual) = caller.call_raw_signal(&raw_data.signal);
+    let c_seq = CString::new(seq).unwrap();
+    c_seq.into_raw()
+}
+
 impl Caller {
-    #[new]
-    fn new(obj: &PyRawObject, net_type: &str, path: &str, beam_size: usize, beam_cut_threshold: f32) {
+    fn new(net_type: &str, path: &str, beam_size: usize, beam_cut_threshold: f32) -> Self {
         if net_type == "256" {
             unsafe {
               if JITTER256 == ptr::null_mut() {
@@ -581,24 +649,48 @@ impl Caller {
         let cal = Caller {
             net, beam_size, beam_cut_threshold
         };
-        obj.init({ cal
-            
-        })
+        //obj.init({ cal })
+        cal
+    }
+
+    fn med_mad(&mut self, x: &Vec<f32>) -> (f32, f32) {
+        let factor=1.4826;
+        let med = median(x);
+        let mut vec = Vec::new();
+        for val in x.iter() {
+            vec.push((val - med).abs());
+        }
+        let mad = median(&vec) * factor;
+        (med, mad)
+    }
+   
+   
+
+
+    fn rescale_signal(&mut self, raw_data: &Vec<f32>) -> Vec<f32> {
+        let (med, mad) = self.med_mad(raw_data);
+        let mut vec = Vec::new();
+        for val in raw_data.iter() {
+            let n = (val - med) / mad;
+            vec.push(n);
+        }
+        vec
     }
     
-    fn call_raw_signal(&mut self, raw_data: Vec<f32>) -> (String,String) {
+    fn call_raw_signal(&mut self, raw_data: &Vec<f32>) -> (String,String) {
+        let rescale_data = self.rescale_signal(raw_data);
         let mut start_pos = 0;
 
         let mut to_stack = Vec::new();
-        while start_pos + STEP * 3 + PAD * 6 < raw_data.len() {
-            let chunk = &raw_data[start_pos..(start_pos + STEP * 3 + PAD * 6).min(raw_data.len())];
+        while start_pos + STEP * 3 + PAD * 6 < rescale_data.len() {
+            let chunk = &rescale_data[start_pos..(start_pos + STEP * 3 + PAD * 6).min(rescale_data.len())];
             let out = self.net.predict(chunk);
             let slice_start_pos = if start_pos == 0 {
                 0
             } else {
                 (PAD).min(out.shape()[0])
             };
-            let slice_end_pos = if start_pos + 3 * STEP + 6 * PAD >= raw_data.len() {
+            let slice_end_pos = if start_pos + 3 * STEP + 6 * PAD >= rescale_data.len() {
                 out.shape()[0]
             } else {
                 out.shape()[0] - PAD
@@ -666,12 +758,12 @@ impl Caller {
     }
 }
 
-#[pyfunction]
+/*#[pyfunction]
 fn beam_search_py(result: &PyArray2<f32>, beam_size: usize, beam_cut_threshold: f32) -> String {
     beam_search(&result.as_array(), beam_size, beam_cut_threshold).0
 }
-
-fn beam_search<D: Data<Elem=f32>>(result: &ArrayBase<D, Ix2>, beam_size: usize, beam_cut_threshold: f32) -> (String,String) {
+*/
+pub fn beam_search<D: Data<Elem=f32>>(result: &ArrayBase<D, Ix2>, beam_size: usize, beam_cut_threshold: f32) -> (String,String) {
     let alphabet: Vec<char> = "NACGT".chars().collect();
     // (base, what)
     let mut beam_prevs = vec![(0, 0)];
@@ -903,6 +995,7 @@ fn initialize_jit256() {
         SGEMM256 = mkl_jit_get_sgemm_ptr(JITTER256);
     }
 }
+/*
 #[pymodule]
 fn deepnano2(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Caller>()?;
@@ -910,3 +1003,4 @@ fn deepnano2(py: Python, m: &PyModule) -> PyResult<()> {
 
     Ok(())
 }
+*/
