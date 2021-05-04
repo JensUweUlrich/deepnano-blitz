@@ -15,7 +15,7 @@ use matrix_load::*;
 use conv_layer::*;
 use gru_layer::*;
 
-use libc::{c_float, c_int, c_longlong, c_void};
+use libc::{c_float, c_int, c_longlong, c_void, size_t, c_char};
 use ndarray::{stack, Array, Axis, Ix1, Ix2, ArrayBase, Data};
 use statistical::{median};
 use std::error::Error;
@@ -524,37 +524,6 @@ pub struct Caller {
     beam_cut_threshold: f32
 }
 
-
-pub struct SignalVector {
-    pub signal : Vec<f32>
-}
-
-impl SignalVector {
-    fn new() -> SignalVector {
-        SignalVector {
-            signal: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, val: f32) {
-        self.signal.push(val);
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn create_signal_vector() -> *mut SignalVector {
-    Box::into_raw(Box::new(SignalVector::new()))
-}
-
-#[no_mangle]
-pub extern "C" fn signal_vector_push(ptr: *mut SignalVector, val: f32) {
-    let signVec = unsafe {
-        assert!(!ptr.is_null());
-        &mut *ptr
-    };
-    signVec.push(val); 
-}
-
 pub fn str_from_nullable<'a>(s: *const libc::c_char) -> Option<&'a str> {
     if s.is_null() {
         None
@@ -575,18 +544,15 @@ pub extern "C" fn create_caller(net_type: *const libc::c_char, path: *const libc
 }
 
 #[no_mangle]
-pub extern "C" fn call_raw_signal(ptr: *mut Caller, sigptr: *mut SignalVector) -> *mut libc::c_char {
+pub extern "C" fn call_raw_signal(ptr: *mut Caller, raw_data: *const c_float, size: size_t) -> *mut libc::c_char {
     let caller = unsafe {
         assert!(!ptr.is_null());
         &mut *ptr
     };
 
-    let raw_data = unsafe {
-        assert!(!sigptr.is_null());
-        &mut *sigptr
-    };
+    let data = unsafe { std::slice::from_raw_parts(raw_data, size) };
 
-    let (seq, qual) = caller.call_raw_signal(&raw_data.signal);
+    let (seq, qual) = caller.call_raw_signal(&data);
     let c_seq = CString::new(seq).unwrap();
     c_seq.into_raw()
 }
@@ -653,7 +619,7 @@ impl Caller {
         cal
     }
 
-    fn med_mad(&mut self, x: &Vec<f32>) -> (f32, f32) {
+    fn med_mad(&mut self, x: &[f32]) -> (f32, f32) {
         let factor=1.4826;
         let med = median(x);
         let mut vec = Vec::new();
@@ -667,7 +633,7 @@ impl Caller {
    
 
 
-    fn rescale_signal(&mut self, raw_data: &Vec<f32>) -> Vec<f32> {
+    fn rescale_signal(&mut self, raw_data: &[f32]) -> Vec<f32> {
         let (med, mad) = self.med_mad(raw_data);
         let mut vec = Vec::new();
         for val in raw_data.iter() {
@@ -677,7 +643,7 @@ impl Caller {
         vec
     }
     
-    fn call_raw_signal(&mut self, raw_data: &Vec<f32>) -> (String,String) {
+    fn call_raw_signal(&mut self, raw_data: &[f32]) -> (String,String) {
         let rescale_data = self.rescale_signal(raw_data);
         let mut start_pos = 0;
 

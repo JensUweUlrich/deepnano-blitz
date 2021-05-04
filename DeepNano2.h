@@ -5,25 +5,16 @@
 
 struct Caller;
 
-struct SignalVector;
-
 using SgemmJitKernelT = void(*)(void *arg1, float *arg2, float *arg3, float *arg4);
-
-struct TestCaller {
-  uintptr_t beam_size;
-  float beam_cut_threshold;
-};
 
 extern "C" {
 
-char *call_raw_signal(Caller *ptr, SignalVector *sigptr);
+char *call_raw_signal(Caller *ptr, const float *raw_data, size_t size);
 
 Caller *create_caller(const char *net_type,
                       const char *path,
                       uintptr_t beam_size,
                       float beam_cut_threshold);
-
-SignalVector *create_signal_vector();
 
 extern uint32_t mkl_cblas_jit_create_sgemm(void **JITTER,
                                            uint32_t layout,
@@ -39,10 +30,6 @@ extern uint32_t mkl_cblas_jit_create_sgemm(void **JITTER,
                                            uintptr_t ldc);
 
 extern SgemmJitKernelT mkl_jit_get_sgemm_ptr(const void *JITTER);
-
-void print_TestCaller(TestCaller buf);
-
-void signal_vector_push(SignalVector *ptr, float val);
 
 extern void vmsExp(int n, const float *a, float *y, long long mode);
 
